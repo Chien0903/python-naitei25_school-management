@@ -49,16 +49,100 @@ class Assign(models.Model):
 
     class Meta:
         unique_together = (('subject', 'class_id', 'teacher', 'academic_year', 'semester'),)
+    
+    def clean(self):
+        """Validate model fields."""
+        from django.core.exceptions import ValidationError
+        
+        # Validate academic year format
+        try:
+            self._parse_academic_year()
+        except ValueError as e:
+            raise ValidationError({'academic_year': str(e)})
+        
+        # Validate semester is valid (1, 2, or 3)
+        if self.semester not in [1, 2, 3]:
+            raise ValidationError({'semester': 'Semester must be 1, 2, or 3.'})
+    
+    def save(self, *args, **kwargs):
+        """Override save to run validation."""
+        self.full_clean()
+        super().save(*args, **kwargs)
 
     @property
     def year_sem(self):
         """Return display format 'YYYY.S' from academic_year and semester.
-        Picks the first 4-digit year if academic_year is like '2024-2025'."""
+        For academic years like '2024-2025':
+        - Semester 1: 2024.1 (Sep-Jan belongs to first year)
+        - Semester 2: 2025.2 (Feb-Jun belongs to second year) 
+        - Semester 3: 2025.3 (Jul-Aug belongs to second year)
+        """
+        try:
+            # Parse academic year with validation
+            display_year = self._parse_academic_year()
+            return f"{display_year}.{self.semester}"
+        except ValueError as e:
+            # Fallback to original format if parsing fails
+            return f"{self.academic_year}.{self.semester}"
+    
+    def _parse_academic_year(self):
+        """Parse and validate academic year format.
+        
+        Supported formats:
+        - "2024-2025" (two consecutive years)
+        - "2024" (single year)
+        
+        Returns:
+            str: The appropriate year for the current semester
+            
+        Raises:
+            ValueError: If academic year format is invalid
+        """
         import re
-        year_str = str(self.academic_year)
-        match = re.search(r"\d{4}", year_str)
-        year = match.group(0) if match else year_str
-        return f"{year}.{self.semester}"
+        from datetime import datetime
+        
+        year_str = str(self.academic_year).strip()
+        
+        # Pattern for "YYYY-YYYY" format
+        range_pattern = r'^(\d{4})-(\d{4})$'
+        # Pattern for single year "YYYY"
+        single_pattern = r'^(\d{4})$'
+        
+        range_match = re.match(range_pattern, year_str)
+        if range_match:
+            first_year, second_year = range_match.groups()
+            first_year_int = int(first_year)
+            second_year_int = int(second_year)
+            
+            # Validate year range
+            if second_year_int != first_year_int + 1:
+                raise ValueError(f"Invalid academic year range: {year_str}. Second year must be consecutive to first year.")
+            
+            # Validate years are reasonable (not too far in past/future)
+            current_year = datetime.now().year
+            if not (2000 <= first_year_int <= current_year + 10):
+                raise ValueError(f"Invalid academic year: {first_year}. Year should be between 2000 and {current_year + 10}.")
+            
+            # Determine which year this semester belongs to
+            if self.semester == 1:
+                return first_year
+            else:  # semester 2 or 3
+                return second_year
+        
+        single_match = re.match(single_pattern, year_str)
+        if single_match:
+            year = single_match.group(1)
+            year_int = int(year)
+            
+            # Validate year is reasonable
+            current_year = datetime.now().year
+            if not (2000 <= year_int <= current_year + 10):
+                raise ValueError(f"Invalid academic year: {year}. Year should be between 2000 and {current_year + 10}.")
+            
+            return year
+        
+        # If no pattern matches, raise error
+        raise ValueError(f"Invalid academic year format: {year_str}. Expected formats: 'YYYY-YYYY' or 'YYYY'.")
 
     def __str__(self):
         cl = self.class_id
