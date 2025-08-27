@@ -1284,3 +1284,78 @@ class EditUserForm(AddUserForm):
             raise ValidationError(_('Email already exists'))
         return email
     
+class TimetableForm(forms.ModelForm):
+    """
+    Form for managing timetable
+    """
+    def __init__(self, *args, year: str | None = None, semester: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Nếu có tham số năm/kỳ từ URL, lọc danh sách Assign tương ứng
+        qs = Assign.objects.all()
+        if year:
+            qs = qs.filter(academic_year__icontains=year)
+        if semester and semester.isdigit():
+            qs = qs.filter(semester=int(semester))
+        self.fields['assign'].queryset = qs
+    assign = forms.ModelChoiceField(
+        queryset=Assign.objects.all(),
+        widget=forms.Select(attrs={
+            'class': 'form-control',
+            'required': True
+        }),
+        label=_('Teaching Assignment')
+    )
+    period = forms.ChoiceField(
+        choices=TIME_SLOTS,
+        widget=forms.Select(attrs={
+            'class': 'form-control',
+            'required': True
+        }),
+        label=_('Period')
+    )
+    day = forms.ChoiceField(
+        choices=DAYS_OF_WEEK,
+        widget=forms.Select(attrs={
+            'class': 'form-control',
+            'required': True
+        }),
+        label=_('Day of Week')
+    )
+    class Meta:
+        model = AssignTime
+        fields = ['assign', 'period', 'day']
+        labels = {
+            'assign': _('Teaching Assignment'),
+            'period': _('Period'),
+            'day': _('Day of Week')
+        }
+    def clean(self):
+        cleaned_data = super().clean()
+        assign = cleaned_data.get('assign')
+        period = cleaned_data.get('period')
+        day = cleaned_data.get('day')
+        if assign and period and day:
+            # Kiểm tra trùng lặp khe thời gian
+            if AssignTime.objects.filter(
+                assign=assign,
+                period=period,
+                day=day
+            ).exists():
+                raise forms.ValidationError(
+                    _('This timetable entry already exists!')
+                )
+            # Kiểm tra khe thời gian đã bị chiếm bởi phân công khác
+            if AssignTime.objects.filter(
+                period=period,
+                day=day
+            ).exclude(assign=assign).exists():
+                raise forms.ValidationError(
+                    _('This time slot is already occupied by another assignment!')
+                )
+            # Kiểm tra giới hạn 2 khe thời gian mỗi tuần cho một Assign
+            existing_slots = AssignTime.objects.filter(assign=assign).count()
+            if existing_slots >= 2:
+                raise forms.ValidationError(
+                    _('This assignment already has the maximum of 2 time slots per week!')
+                )
+        return cleaned_data
